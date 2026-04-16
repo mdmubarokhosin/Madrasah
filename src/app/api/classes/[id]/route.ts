@@ -1,0 +1,45 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabase-api';
+import { requireAuth, isAuthResponse } from '@/lib/auth';
+
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAuth(request);
+  if (isAuthResponse(auth)) return auth;
+
+  const { id } = await params;
+  try {
+    const data = await request.json();
+    const updateData: Record<string, unknown> = {};
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.nameEn !== undefined) updateData.nameEn = data.nameEn || null;
+    if (data.description !== undefined) updateData.description = data.description || null;
+    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+
+    const { data: item, error } = await supabase
+      .from('Class')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) return NextResponse.json({ error: 'সার্ভার ত্রুটি' }, { status: 500 });
+    return NextResponse.json({ class: item });
+  } catch {
+    return NextResponse.json({ error: 'সার্ভার ত্রুটি' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAuth(request);
+  if (isAuthResponse(auth)) return auth;
+
+  const { id } = await params;
+  try {
+    const { error } = await supabase.from('Class').delete().eq('id', id);
+    if (error) return NextResponse.json({ error: 'ডিলিট করা যায়নি' }, { status: 500 });
+    return NextResponse.json({ success: true });
+  } catch {
+    return NextResponse.json({ error: 'ডিলিট করা যায়নি' }, { status: 500 });
+  }
+}

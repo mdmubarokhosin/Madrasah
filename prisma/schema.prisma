@@ -1,0 +1,291 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SiteSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Academic Years
+model AcademicYear {
+  id          String   @id @default(cuid())
+  name        String
+  nameEn      String?
+  startDate   DateTime?
+  endDate     DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  students    Student[]
+  exams       Exam[]
+  incomes     Income[]
+  expenses    Expense[]
+  salaries    Salary[]
+  fees        StudentFee[]
+  attendance  Attendance[]
+}
+
+// Standalone Classes (for student management, attendance, etc.)
+model Class {
+  id          String    @id @default(cuid())
+  name        String
+  nameEn      String?
+  description String?
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  students    Student[]
+  subjects    Subject[]
+  attendance  Attendance[]
+}
+
+// Exam
+model Exam {
+  id             String         @id @default(cuid())
+  name           String
+  nameEn         String?
+  year           String
+  isPublished    Boolean        @default(false)
+  academicYearId String?
+  academicYear   AcademicYear?  @relation(fields: [academicYearId], references: [id])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  results        Result[]
+  marhalas       Marhala[]
+  certificates   CertificateApplication[]
+}
+
+// Marhala (Exam-specific class/level - kept for backward compat with results)
+model Marhala {
+  id        String    @id @default(cuid())
+  name      String
+  nameEn    String?
+  examId    String
+  exam      Exam      @relation(fields: [examId], references: [id])
+  createdAt DateTime  @default(now())
+  updatedAt DateTime @updatedAt
+  results   Result[]
+  subjects  Subject[]
+  certificates CertificateApplication[]
+}
+
+// Student
+model Student {
+  id            String                    @id @default(cuid())
+  name          String
+  roll          String
+  regNo         String
+  fatherName    String?
+  motherName    String?
+  madrasa       String?
+  gender        String                    @default("male")
+  phone         String?
+  address       String?
+  dateOfBirth   DateTime?
+  classId       String?
+  class         Class?                    @relation(fields: [classId], references: [id])
+  academicYearId String?
+  academicYear  AcademicYear?             @relation(fields: [academicYearId], references: [id])
+  admissionDate DateTime?
+  isActive      Boolean                   @default(true)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+  results       Result[]
+  certificates  CertificateApplication[]
+  fees          StudentFee[]
+  attendance    Attendance[]
+}
+
+// Subject
+model Subject {
+  id         String       @id @default(cuid())
+  name       String
+  totalMarks Int
+  passMarks  Int          @default(33)
+  marhalaId  String
+  marhala    Marhala      @relation(fields: [marhalaId], references: [id])
+  classId    String?
+  class      Class?       @relation(fields: [classId], references: [id])
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  resultItems ResultItem[]
+}
+
+// Result
+model Result {
+  id        String       @id @default(cuid())
+  studentId String
+  student   Student      @relation(fields: [studentId], references: [id])
+  examId    String
+  exam      Exam         @relation(fields: [examId], references: [id])
+  marhalaId String
+  marhala   Marhala      @relation(fields: [marhalaId], references: [id])
+  totalMarks Int
+  gpa       Float
+  merit     Int?
+  isPassed  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  items     ResultItem[]
+}
+
+// Result Item
+model ResultItem {
+  id        String   @id @default(cuid())
+  resultId  String
+  result    Result   @relation(fields: [resultId], references: [id])
+  subjectId String
+  subject   Subject  @relation(fields: [subjectId], references: [id])
+  marks     Int
+  isPassed  Boolean  @default(true)
+}
+
+// Notice
+model Notice {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  date      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// FAQ
+model FAQ {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Certificate Application
+model CertificateApplication {
+  id             String   @id @default(cuid())
+  applicationId  String   @unique
+  studentId      String?
+  student        Student? @relation(fields: [studentId], references: [id])
+  examId         String
+  exam           Exam     @relation(fields: [examId], references: [id])
+  marhalaId      String
+  marhala        Marhala  @relation(fields: [marhalaId], references: [id])
+  roll           String
+  regNo          String
+  studentName    String
+  certificateType String
+  status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Contact Message
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Income
+model Income {
+  id             String        @id @default(cuid())
+  date           DateTime
+  category       String
+  description    String?
+  amount         Float
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  receivedBy     String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+// Expense
+model Expense {
+  id             String        @id @default(cuid())
+  date           DateTime
+  category       String
+  description    String?
+  amount         Float
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  paidTo         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+// Salary
+model Salary {
+  id             String        @id @default(cuid())
+  employeeName   String
+  designation    String?
+  month          String
+  year           String
+  basicSalary    Float         @default(0)
+  allowance      Float         @default(0)
+  deduction      Float         @default(0)
+  netSalary      Float         @default(0)
+  paymentStatus  String        @default("unpaid")
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+// Student Fee
+model StudentFee {
+  id             String        @id @default(cuid())
+  studentId      String
+  student        Student       @relation(fields: [studentId], references: [id])
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  feeType        String
+  amount         Float         @default(0)
+  paidAmount     Float         @default(0)
+  dueAmount      Float         @default(0)
+  status         String        @default("unpaid")
+  month          String?
+  paymentDate    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+// Attendance
+model Attendance {
+  id             String        @id @default(cuid())
+  studentId      String
+  student        Student       @relation(fields: [studentId], references: [id])
+  classId        String
+  class          Class         @relation(fields: [classId], references: [id])
+  date           DateTime
+  status         String
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
