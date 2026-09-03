@@ -1,0 +1,23 @@
+{
+  "name": "মাদ্রাসা",
+  "short_name": "মাদ্রাসা",
+  "description": "কুরআন ও সুন্নাহর আলোকে পরিচালিত কওমি মাদরাসা",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#166534",
+  "orientation": "portrait-primary",
+  "lang": "bn",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

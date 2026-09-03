@@ -1,0 +1,11 @@
+# Cloudflare Pages SPA routing configuration
+# Static Next.js assets - serve directly
+/_next/*  /_next/:splat  200
+
+# Fonts directory
+/fonts/*  /fonts/:splat  200
+
+# All other routes serve index.html for client-side SPA routing
+# This handles /about, /admin, /departments, /student, etc.
+# Unknown paths (404s) are also caught here and handled by the SPA's NotFoundPage component
+/*  /index.html  200
