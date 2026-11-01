@@ -1,0 +1,26 @@
+User-agent: Googlebot
+Allow: /
+Disallow: /admin
+Disallow: /student
+
+User-agent: Bingbot
+Allow: /
+Disallow: /admin
+Disallow: /student
+
+User-agent: Twitterbot
+Allow: /
+Disallow: /admin
+Disallow: /student
+
+User-agent: facebookexternalhit
+Allow: /
+Disallow: /admin
+Disallow: /student
+
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /student
+
+Sitemap: https://madrasahbd.pages.dev/sitemap.xml

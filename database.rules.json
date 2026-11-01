@@ -1,0 +1,284 @@
+// ============================================================================
+// Firebase Realtime Database Security Rules — মাদরাসা ম্যানেজমেন্ট সিস্টেম
+// ============================================================================
+//
+// DEPLOYMENT
+//   1) This file must be referenced from firebase.json:
+//        { "database": { "rules": "database.rules.json" } }
+//   2) Deploy with:
+//        npm i -g firebase-tools
+//        firebase login
+//        firebase deploy --only database
+//      Rules deploy to the project's DEFAULT Realtime Database instance
+//      (the same instance the app's NEXT_PUBLIC_FIREBASE_DATABASE_URL points
+//      at, e.g. https://<project>-default-rtdb.<region>.firebasedatabase.app).
+//      If you use a NON-default instance, register a target in .firebaserc
+//      ("targets": { "<project>": { "database": { "<instance-name>": [...] } } })
+//      and deploy with: firebase deploy --only database:<target-name>
+//
+// DESIGN
+//   - Deny-by-default at the root; every node below opts in explicitly.
+//   - ADMIN means: authenticated user whose uid is registered in /adminUids.
+//     RTDB rules have no variables, so the ADMIN expression is repeated inline:
+//       auth != null && root.child('adminUids').child(auth.uid).val() === true
+//   - /adminUids is maintained by the app at first-admin registration
+//     (registerAdmin writes /adminUids/<uid> = true BEFORE the profile write).
+//   - ONE-TIME BOOTSTRAP: while NO admin profile exists yet
+//     (!root.child('adminUsers').exists()) AND the registration claim node
+//     /config/adminRegistrationClaim exists, an authenticated user may create
+//     the first /adminUids entry, the first /adminUsers profile and the default
+//     /adminRoles role. As soon as the first profile lands, this escape hatch
+//     closes forever. DO NOT ship temporarily-open rules for bootstrap.
+//   - MIGRATION (existing deployments): admins created before this ruleset are
+//     not yet in /adminUids. Add each admin's Firebase Auth uid manually via
+//     the Firebase Console (Realtime Database → /adminUids → <uid> = true) —
+//     see README "Firebase Security Rules & Bootstrap".
+//   - Rules are GRANT-only (cascade downward): public .read on a child never
+//     leaks a sibling whose .read is false; sensitive children (githubConfig,
+//     adminAuth) are denied explicitly for documentation value.
+// ============================================================================
+
+{
+  // ── Root: deny everything unless a node below opts in ──────────────────────
+  ".read": false,
+  ".write": false,
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // ADMIN-ONLY CORE (no public read, no public write)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // Registry of admin uids. Public READ is intentional: it exposes only opaque
+  // uids (never emails/hashes) and lets rules + tooling verify admin-ness.
+  "adminUids": {
+    ".read": true,
+    "$uid": {
+      ".write": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || (!root.child('adminUsers').exists() && root.child('config').child('adminRegistrationClaim').exists()))",
+      ".validate": "newData.val() === true"
+    }
+  },
+
+  // Admin profiles: emails, role bindings and PASSWORD HASHES.
+  //  - list read: admins always; anonymous ONLY while no profile exists yet
+  //    (returns null — this is what makes first-admin detection work)
+  //  - $uid read: admins + the profile owner (login/restore resolve their own
+  //    profile after Firebase Auth verified the password)
+  //  - $uid write: admins; plus the bootstrap hatch which requires the
+  //    matching /adminUids claim created during first-admin registration
+  "adminUsers": {
+    ".read": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || !root.child('adminUsers').exists())",
+    "$uid": {
+      ".read": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || $uid === auth.uid)",
+      ".write": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || (root.child('adminUids').child($uid).exists() && root.child('config').child('adminRegistrationClaim').exists()))"
+    }
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // PASSWORD RECOVERY (v2.3) — minimal public surface for the forgot-password
+  // wizard. Once an admin exists, /adminUsers is admin-only, so a LOCKED-OUT
+  // admin (not signed in) could never look up their own recovery material.
+  // This node exposes ONLY non-sensitive data, keyed by username (knowing the
+  // username is the read capability):
+  //   byUsername/<usernameLower> → { uid, question, answerHash, keyHash, setupAt }
+  // No emails, no password hashes, no profile payloads. answerHash/keyHash are
+  // salted PBKDF2 (100k iterations); online attempts are rate-limited by the
+  // wizard's 5-attempt lockout. The final /adminUsers/$uid password write is
+  // still gated by the admin/bootstrap rules above (the registration claim).
+  "adminRecovery": {
+    "byUsername": {
+      "$username": {
+        ".read": "auth != null",
+        ".write": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || (!root.child('adminUsers').exists() && root.child('config').child('adminRegistrationClaim').exists()))"
+      }
+    }
+  },
+
+  // RBAC roles/permissions — admins only (bootstrap hatch covers the default
+  // role creation during first-admin registration).
+  "adminRoles": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && (root.child('adminUids').child(auth.uid).val() === true || (!root.child('adminUsers').exists() && root.child('config').child('adminRegistrationClaim').exists()))"
+  },
+
+  // Full audit trail — admins only (public visitors must never download it).
+  "activityLogs": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true"
+  },
+
+  // Backup metadata written by the admin backup tooling — admins only.
+  "backupHistory": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true"
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // CONFIG + SETTINGS (mixed: public content children vs. secrets)
+  // Whole-node reads (admin backup/export) require an admin; visitors only get
+  // the explicitly public children listed below.
+  // ───────────────────────────────────────────────────────────────────────────
+  "config": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+
+    // Public site configuration (site header, hero, about, social links…)
+    "siteInfo":        { ".read": true },
+    // Public payment channels shown on donation pages
+    "paymentMethods":  { ".read": true },
+    // Public class routine + syllabus pages
+    "classRoutine":    { ".read": true },
+    "syllabus":        { ".read": true },
+    // Public prayer timetable configuration
+    "prayerConfig":    { ".read": true },
+    "prayerTimes":     { ".read": true },
+    // Donation QR configuration rendered on public pages
+    "qrPaymentConfig": { ".read": true },
+
+    // SECRETS — explicit denies (admins still read them through /config):
+    // GitHub repo write token must never reach anonymous visitors
+    "githubConfig":    { ".read": false },
+    // Super-admin password fallback (hash) — client-side public reads would
+    // enable offline brute-forcing
+    "adminAuth":       { ".read": false },
+
+    // FIRST-ADMIN REGISTRATION CLAIM (atomic race guard written by registerAdmin)
+    //  - any AUTHENTICATED user may create it ONCE while no admin profile exists
+    //  - while no admin profile exists it may also be re-claimed/deleted (a
+    //    crashed registration must not lock the system out forever)
+    //  - once an admin profile exists, only admins can change/delete it
+    "adminRegistrationClaim": {
+      ".read": "auth != null",
+      ".write": "auth != null && ((!data.exists() && newData.exists()) || !root.child('adminUsers').exists())",
+      ".validate": "newData.isNumber()"
+    }
+
+    // admin-only children without extra rules (smsConfig, hifzMigrated, …)
+    // inherit the admin-only /config permissions above.
+  },
+
+  "settings": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    // Super-admin fallback password (hash) — same secret treatment as config
+    "adminAuth": { ".read": false }
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // PUBLIC CONTENT — everyone reads, only admins write
+  // (every node the public site subscribes to / reads)
+  // ───────────────────────────────────────────────────────────────────────────
+  "notices":            { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "departments":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "teachers":           { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "students":           { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "exams":              { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "results":            { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "blogs":              { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "gallery":            { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "admission":          { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "donations":          { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "events":             { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "hifzRecords":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "onlineExams":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "libraryBooks":       { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "calendarEvents":     { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "alumni":             { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "feeConfigs":         { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "feePayments":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "hostelRooms":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "hostelMeals":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "dawahPrograms":      { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "dawahJamats":        { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "studyMaterials": {
+    ".read": true,
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    "$materialId": {
+      // Public download counter: any visitor may INCREASE it (never decrease
+      // or forge other fields) — keeps MaterialsPage's counter working.
+      "downloadCount": {
+        ".write": "auth != null && newData.isNumber() && (!data.exists() || newData.val() >= data.val())"
+      }
+    }
+  },
+  // Public hadith/dua page + admin management
+  "hadithDuas":         { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  // Public attendance lookup page (dbGet('/attendance'))
+  "attendance":         { ".read": true, ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // FINANCIAL / OPERATIONAL DATA — admins only (no public reader exists)
+  // ───────────────────────────────────────────────────────────────────────────
+  "expenses":              { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "expenseCategories":     { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "salaryRecords":         { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "donationSubscriptions": { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "vouchers":              { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "hostelAllocations":     { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+  "libraryIssues":         { ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true", ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true" },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // VISITOR SUBMISSIONS — CREATE-ONLY
+  // Visitors may push NEW entries (contact form, online admission, exam
+  // submissions) but can NEVER read, edit or delete them — not even their own.
+  // Admins read/process them through the admin panel.
+  // ───────────────────────────────────────────────────────────────────────────
+  "contactMessages": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    "$messageId": {
+      ".write": "auth != null && !data.exists() && newData.exists()",
+      ".validate": "newData.hasChildren(['name', 'phone', 'message', 'createdAt'])",
+      "name":      { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "email":     { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "phone":     { ".validate": "newData.isString() && newData.val().length < 1000" },
+      "message":   { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "date":      { ".validate": "newData.isString() && newData.val().length < 100" },
+      "isRead":    { ".validate": "newData.isBoolean()" },
+      "createdAt": { ".validate": "newData.isNumber()" }
+    }
+  },
+
+  "admissionApplications": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    "$applicationId": {
+      ".write": "auth != null && !data.exists() && newData.exists()",
+      ".validate": "newData.hasChildren(['studentName', 'fatherName', 'phone', 'createdAt'])",
+      "studentName":       { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "fatherName":        { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "motherName":        { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "dateOfBirth":       { ".validate": "newData.isString() && newData.val().length < 100" },
+      "phone":             { ".validate": "newData.isString() && newData.val().length < 100" },
+      "guardianPhone":     { ".validate": "newData.isString() && newData.val().length < 100" },
+      "address":           { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "previousEducation": { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "desiredDepartment": { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "desiredClass":      { ".validate": "newData.isString() && newData.val().length < 1000" },
+      "bloodGroup":        { ".validate": "newData.isString() && newData.val().length < 100" },
+      "imageUrl":          { ".validate": "newData.isString() && newData.val().length < 1000000" },
+      "status":            { ".validate": "newData.isString() && newData.val().length < 100" },
+      "createdAt":         { ".validate": "newData.isNumber()" }
+    }
+  },
+
+  "examSubmissions": {
+    ".read": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('adminUids').child(auth.uid).val() === true",
+    "$submissionId": {
+      ".write": "auth != null && !data.exists() && newData.exists()",
+      ".validate": "newData.hasChildren(['examId', 'studentName', 'studentRoll', 'submittedAt'])",
+      "examId":        { ".validate": "newData.isString() && newData.val().length < 1000" },
+      "studentName":   { ".validate": "newData.isString() && newData.val().length < 1000" },
+      "studentRoll":   { ".validate": "newData.isString() && newData.val().length < 1000" },
+      // answer map (questionId → answer). RTDB rejects ANY child without a
+      // .validate rule once validation exists on the parent, so answers MUST
+      // be explicitly allowed or every exam submission would fail after deploy.
+      "answers":       { ".validate": "newData.hasChildren()" },
+      "obtainedMarks": { ".validate": "newData.isNumber()" },
+      "totalMarks":    { ".validate": "newData.isNumber()" },
+      "submittedAt":   { ".validate": "newData.isNumber()" }
+    }
+  }
+
+  // Any node NOT listed above (or added later without a rule) stays fully
+  // denied by the root — new collections MUST get an explicit rule here.
+}
